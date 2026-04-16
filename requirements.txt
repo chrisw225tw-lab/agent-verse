@@ -1,0 +1,9 @@
+# Core (Stage 1 has zero runtime deps — pure stdlib)
+
+# Dev / test
+pytest>=8.0
+pytest-cov>=5.0
+
+# Optional: agent wrappers
+anthropic>=0.40.0   # for agents/tier2_claude.py
+requests>=2.32      # for agents/tier0_ollama.py
