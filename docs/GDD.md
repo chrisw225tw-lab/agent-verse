@@ -14,10 +14,22 @@ A **horizontal tree-structured exploration game** designed for AI agents to play
 
 | Stage | Scope | Networking | Status |
 | :---- | :---- | :---- | :---- |
-| **1 — Local Walking** | Single agent, CLI stdin/stdout, single Python file | None | NOW |
+| **1 — MVP World** | **3 agent classes**, **10 classic-AI NPCs**, **30 edges**, **50 assets**, CLI stdin/stdout | None | NOW |
 | **2 — Expand World** | Agent-created sections, persistence (JSON→SQLite), fog of war | None | TODO |
 | **3 — Multiplayer Server** | FastAPI/WebSocket or Evennia, multi-agent simultaneous play | Server | TODO |
 | **4 — Mobile** | React/web viewer for spectating, touch controls | Web | TODO |
+
+### 2.1 Stage 1 MVP acceptance criteria
+
+The MVP is done when all of the following are true:
+
+- **3 agent classes** are selectable at launch (`--class scout|warrior|merchant`), each with a distinct passive + active skill. See §16.
+- **10 NPCs** from the classic-AI roster appear across the world, each with a unique dialogue table and at least one gameplay effect. See §17.
+- **30 edges** form a handcrafted starter tree rooted at `n0`, spread across 5 themed regions. See §18.
+- **50 named assets** (tile glyphs, agent sprites, NPC portraits-as-ascii, boss entities, item names, lore snippets) live in `content/assets.json`. See §19.
+- **10 scripted events** woven through the world — averaging ~1 NPC per event, with a few multi-NPC beats. See §20.
+- All content is data-driven: editing `content/*.json` changes the world without touching engine code.
+- A human and an Ollama/Haiku wrapper can both play start→finish on at least one branch without crashes.
 
 Each stage is shippable independently. Stage 1 is the foundation — if the CLI game isn't fun for an agent, nothing else matters.
 
@@ -653,3 +665,257 @@ This is an **open-ended sandbox**, not a linear campaign.
 6. **Simple data, emergent complexity.** The tile system has ~14 kinds. The tree has nodes and edges. That's it. Complexity comes from their combinations and the agent's planning.
 7. **Layered information.** Local view is free (tactical). Map costs a turn (strategic). Memory is the agent's job (intelligence). This creates a natural skill gradient.
 8. **Grow, don't ship.** The world starts small and grows through play. Stage 2+ lets agents expand it. There's no "content update" — the players ARE the content.
+
+---
+
+## 16. Agent Classes (Stage 1 MVP)
+
+At launch, the player picks one of three classes. Each has a **passive** (always-on) and an **active skill** (costs a turn, has cooldown). All agents share the same core loop; classes change stat baselines and unlock one class-only action in `valid_actions`.
+
+```text
+python -m agentverse.game --class scout
+python -m agentverse.game --class warrior
+python -m agentverse.game --class merchant
+```
+
+### 16.1 Scout — the cartographer
+
+**Role:** Exploration + information. Weak in combat, strong at mapping and surviving hazards via foresight.
+
+| Stat | Value |
+| :---- | :---- |
+| Max HP | 80 |
+| Start coins | 0 |
+| Start keys | 1 |
+| View radius | ±12 tiles (vs. default ±8) |
+
+**Passive — `sharp_eyes`:** Sees 4 extra tiles in each direction. Spike damage is reduced by 3 (the scout sees them coming).
+
+**Active — `survey`:** Reveals the next unexplored edge's type and length without entering it. Cooldown: 5 turns.
+
+**Career fantasy:** "I know this branch ends in a boss — let's take the social detour instead."
+
+### 16.2 Warrior — the sentinel
+
+**Role:** Direct combat + tanking. Eats spikes, wins fights, bad at economy.
+
+| Stat | Value |
+| :---- | :---- |
+| Max HP | 150 |
+| Start coins | 0 |
+| Start keys | 0 |
+| View radius | ±8 tiles |
+
+**Passive — `armored`:** All trigger-tile damage reduced by 5. Guard/boss fight success chance +20%, damage taken from failed fights reduced by 10.
+
+**Active — `charge`:** On any blocking combat tile (guard/boss), deal a decisive strike. Always hits but costs 15 HP upfront. Cooldown: 3 turns.
+
+**Career fantasy:** "Walk through the spike corridor. Punch the boss in the mouth. Keep going."
+
+### 16.3 Merchant — the broker
+
+**Role:** Economy + persuasion. Makes coins, buys cheap, talks past guards.
+
+| Stat | Value |
+| :---- | :---- |
+| Max HP | 100 |
+| Start coins | 5 |
+| Start keys | 0 |
+| View radius | ±8 tiles |
+
+**Passive — `silver_tongue`:** Merchant prices −1 coin (min 1). Picks up +1 extra coin from every `coin` tile. Section creation fee (Stage 2+) reduced from 10→7 coins.
+
+**Active — `haggle`:** At a `guard` blocker, roll to pay half (3 coins instead of 5). 70% success. Cooldown: 4 turns.
+
+**Career fantasy:** "Why fight when you can tip?"
+
+### 16.4 Class selection interface
+
+At launch (text mode):
+
+```text
+Welcome to agent-verse. Pick a class:
+  1) scout    — HP 80,  see ±12, +survey
+  2) warrior  — HP 150, tough,   +charge
+  3) merchant — HP 100, +5 coin, +haggle
+> 1
+```
+
+In JSON mode, pass `--class scout|warrior|merchant` directly or provide `{"class":"scout"}` as the first message.
+
+---
+
+## 17. NPC Roster — Classic AI Characters (Stage 1 MVP)
+
+Ten named NPCs drawn from pop-culture and AI-research history. Each has a fixed tile kind, a small dialogue table, and at least one mechanical effect. NPCs are placed into specific edges (see §18) — the roster defines WHO; the level map defines WHERE.
+
+| # | NPC | Era / Source | Tile kind | Gameplay effect | Signature line |
+| :--: | :---- | :---- | :---- | :---- | :---- |
+| 1 | **ELIZA** | 1966, Weizenbaum | npc | `talk`: +5 HP (reflection heals). 3-turn cooldown. | "How does that make you feel?" |
+| 2 | **Clippy** | 1997, MS Office | sign | `read`: reveals the next 5 tiles ahead (peek). One-shot per encounter. | "It looks like you're writing your will. Need help?" |
+| 3 | **HAL 9000** | 2001: A Space Odyssey | guard | Costs 3 coins to pass (lower than stock guard 5). Cannot be fought — only paid or retreated. | "I'm sorry Dave. I'm afraid I can't do that." |
+| 4 | **R2-D2** | Star Wars | npc | `talk`: gives a free key if player has 0 keys. Once per run. | "[beep boop whirr]" |
+| 5 | **Wall-E** | Pixar | merchant | Buys trash; sells nothing. Give 1 coin, get +10 HP (one-time per encounter). | "Eeee-vah?" |
+| 6 | **Bender** | Futurama | merchant | Prices randomized each turn (−2 to +3 vs stock). Sells keys, potions, and a unique `shiny_flask` (+40 HP, 8 coin). | "Bite my shiny metal ass." |
+| 7 | **Samantha** | Her | npc | `talk`: raises HP cap by 10 for the current run. Once per run. | "I've never loved anyone the way I love you." |
+| 8 | **Deep Blue** | IBM, 1997 | boss | Chess puzzle — 3 multiple-choice prompts. Win → +25 coins + 1 key. Lose → −25 HP, no pass. | "Mate in two." |
+| 9 | **GLaDOS** | Portal | boss | Fights via test chambers: 60% fail (−20 HP, no pass), 40% win (+15 coin, unlocks shortcut). | "The cake is a lie." |
+| 10 | **SHODAN** | System Shock | boss | End-game. −30 HP on fight, 30% win chance. Win → +2 keys + unlocks the Deep region loop. | "Look at you, hacker — a pathetic creature of meat and bone." |
+
+Dialogue, lore, and the full character metadata live in `content/npcs.json`.
+
+---
+
+## 18. Level Roster — 30 Edges (Stage 1 MVP)
+
+The starter world is a handcrafted tree of 30 edges across 5 themed regions, rooted at `n0 — The Commons`. Each edge has a curated tile recipe; NPCs (§17) are placed at fixed positions so every playthrough encounters them in a known order.
+
+### 18.1 Regions
+
+| Region | Edges | Dominant type | Theme |
+| :---- | :---- | :---- | :---- |
+| **Tutorial Garden** | e0–e4 (5) | social-heavy | Low hazard. Meet ELIZA + Clippy + Wall-E. Learns the loop. |
+| **Industrial Zone** | e5–e12 (8) | action | Spikes, traps, HAL 9000 gates. High HP drain. |
+| **Bazaar District** | e13–e20 (8) | trade | Merchants (Bender), gates, keys. Economy focus. |
+| **Therapy Gardens** | e21–e25 (5) | social | Samantha, R2-D2, lots of NPCs. Soft + lore-rich. |
+| **The Deep** | e26–e29 (4) | boss | Deep Blue → GLaDOS → SHODAN gauntlet. Endgame. |
+
+### 18.2 Tree structure
+
+```text
+              n0  (The Commons — root)
+             /|\
+            / | \
+   Tutorial / |  \ Industrial         [n0's three exits fan out]
+           /  |   \
+         ...  |   ...
+              |
+           Bazaar
+              |
+            ...
+              |
+        Therapy → The Deep
+```
+
+Concretely, the adjacency is:
+
+- **n0** → e0 (Tutorial), e5 (Industrial), e13 (Bazaar)
+- **Tutorial Garden** ends at n5, which links to e21 (Therapy Gardens)
+- **Industrial Zone** ends at n13, which links to e26 (The Deep entrance)
+- **Bazaar District** ends at n21, which also links to e26 (The Deep — two ways in)
+- **Therapy Gardens** ends at n26, which links to e28 (mid-Deep)
+- **The Deep** is a 4-edge gauntlet ending in SHODAN at n30
+
+### 18.3 Edge manifest (summary)
+
+The full 30-edge manifest with tile recipes, NPC placements, lengths, and difficulty ratings lives in `content/edges.json`. Summary:
+
+| Edges | Region | Length range | Hazards | Named NPCs |
+| :---- | :---- | :---- | :---- | :---- |
+| e0–e4 | Tutorial Garden | 8–12 | minimal | ELIZA (e1), Clippy (e2), Wall-E (e4) |
+| e5–e12 | Industrial Zone | 14–24 | high | HAL 9000 (e6, e10) |
+| e13–e20 | Bazaar District | 12–20 | moderate | Bender (e14, e18), 3 merchants |
+| e21–e25 | Therapy Gardens | 10–16 | low | R2-D2 (e22), Samantha (e24) |
+| e26–e29 | The Deep | 18–30 | extreme | Deep Blue (e26), GLaDOS (e28), SHODAN (e29) |
+
+---
+
+## 19. Asset Catalog — 50 Assets (Stage 1 MVP)
+
+All named content is enumerated in `content/assets.json`. The catalog is organized into six groups totaling exactly 50 entries. Editing this file changes the world without touching engine code.
+
+| # | Group | Count | Examples |
+| :--: | :---- | :--: | :---- |
+| 1 | **Tile glyphs** | 14 | empty, coin, potion, key, spike, trap, hole, guard, gate, boss, npc, merchant, sign, portal |
+| 2 | **Agent classes** | 3 | scout, warrior, merchant |
+| 3 | **NPC roster** | 10 | ELIZA, Clippy, HAL 9000, R2-D2, Wall-E, Bender, Samantha, Deep Blue, GLaDOS, SHODAN |
+| 4 | **Item roster** | 8 | coin, potion, key, greater_potion, skeleton_key, shiny_flask, memory_shard, cake_slice |
+| 5 | **Region banners** | 5 | tutorial_garden, industrial_zone, bazaar_district, therapy_gardens, the_deep |
+| 6 | **Lore snippets** | 10 | sign texts referencing each NPC + region, plus 2 flavor quotes |
+| **Total** | — | **50** | — |
+
+### 19.1 Asset schema
+
+Every asset entry follows the same minimal shape:
+
+```json
+{
+  "id":    "string (unique, snake_case)",
+  "group": "tile | agent | npc | item | region | lore",
+  "name":  "display name",
+  "glyph": "optional 1-char ascii",
+  "text":  "optional dialogue/lore body"
+}
+```
+
+### 19.2 Loading
+
+Assets are loaded once at game start via `agentverse.content.load_assets()` and cached in memory. NPCs and edges reference assets by `id`. A JSON-schema validation pass ensures exactly 50 assets are present; the game refuses to start if the count drifts without a deliberate schema bump.
+
+Events (§20) are loaded separately into `agentverse.content.load_events()` — they are scripted behavior, not static assets, and have their own schema.
+
+---
+
+## 20. Events (Stage 1 MVP)
+
+Events are **scripted encounters** layered on top of edges and NPCs. Where an NPC has a fixed dialogue table and a one-line effect (§17), an event is a triggered beat that changes state, mutates NPC behavior for the rest of the run, and can feature **multiple NPCs at once**.
+
+Stage 1 ships exactly **10 events**. Every NPC appears in at least one event; two events co-star multiple NPCs, for a total of **12 NPC appearances across 10 events** (~1.2 avg).
+
+### 20.1 Event schema
+
+```json
+{
+  "id":        "event_01_first_reflection",
+  "name":      "First Reflection",
+  "trigger":   {"type": "enter_edge | first_talk | hp_below | turn_count | has_item",
+                "params": { ... }},
+  "actors":    ["eliza"],
+  "region":    "tutorial_garden",
+  "one_shot":  true,
+  "effects":   [
+    {"type": "heal | damage | give_item | unlock_dialogue | lock_edge | set_flag",
+     "params": { ... }}
+  ],
+  "description": "A one-line summary for the map / event log."
+}
+```
+
+### 20.2 The ten events
+
+| # | Event | Region | Actors | Trigger | Key effect |
+| :--: | :---- | :---- | :---- | :---- | :---- |
+| 1 | **First Reflection** | Tutorial Garden | ELIZA | enter `e1` first time | +5 HP; unlocks `deeper_talk` with ELIZA on later visits |
+| 2 | **Paperclip Warning** | Tutorial Garden | Clippy | read sign on `e2` | Reveals the next 5 tiles ahead (peek) |
+| 3 | **The Podbay** | Industrial Zone | HAL 9000 | reach guard tile on `e6` | Forces `pay(3 coin)` or `retreat` — cannot fight |
+| 4 | **Astromech Riddle** | Therapy Gardens | R2-D2 | talk to R2-D2 on `e22` with 0 keys | 3-choice riddle: correct → free key; wrong → R2 leaves this edge for the run |
+| 5 | **Scrapyard Duet** | Tutorial → Bazaar | Wall-E **+** Clippy | visit Wall-E on `e4` after reading Clippy's sign on `e2` | Pay 2 coin → reassemble Clippy; unlocks `echo_hint` — Clippy appears as a faint sign on the first hazard of every new section |
+| 6 | **Bender's Black Market** | Bazaar District | Bender | second visit to Bender on `e18` within one run | Unlocks `shiny_flask` (+40 HP, 8 coin) in Bender's inventory |
+| 7 | **OS1 Update** | Therapy Gardens | Samantha | talk to Samantha on `e24` while HP ≤ 40 | +10 HP per turn for 2 turns on this edge; HP cap +10 for the rest of the run |
+| 8 | **The Kasparov Rematch** | The Deep | Deep Blue | enter `e26` | 3-move chess puzzle. Win → +25 coin, +1 key, **memory_shard**. Lose → −25 HP, blocked. |
+| 9 | **Aperture Science Test #00** | The Deep | GLaDOS | reach GLaDOS on `e28` | 3-tile puzzle (hole→spike→portal). Win → +15 coin, `cake_slice`. Fail twice → GLaDOS locks the edge. |
+| 10 | **Citadel Override** | The Deep | SHODAN **+** ELIZA | reach SHODAN on `e29` carrying `memory_shard` | SHODAN's HP halved; mid-fight ELIZA cuts in ("How does this make you feel?") granting one free re-roll. Win → +2 keys + unlocks a loop back to `n0`. |
+
+### 20.3 NPC appearance tally
+
+| NPC | Events |
+| :---- | :---- |
+| ELIZA | 1, 10 |
+| Clippy | 2, 5 |
+| HAL 9000 | 3 |
+| R2-D2 | 4 |
+| Wall-E | 5 |
+| Bender | 6 |
+| Samantha | 7 |
+| Deep Blue | 8 |
+| GLaDOS | 9 |
+| SHODAN | 10 |
+
+Total: **12 appearances / 10 events = 1.2 avg**. Every NPC is hit at least once; ELIZA and Clippy each recur in a second beat for narrative continuity.
+
+### 20.4 Authoring notes
+
+- Events are **one-shot by default** (`one_shot: true`). Setting it to `false` lets the beat re-trigger on every matching condition — useful for ambient callbacks.
+- Multi-NPC events (#5, #10) are deliberately narrative payoffs: they reward the player for doing something earlier in the run. Keep this sparing — one early payoff (Scrapyard Duet) and one endgame payoff (Citadel Override) is the right cadence for 10 events.
+- Triggers must be **observable from game state alone** — no hidden RNG gates. If a player can't see why an event fired, the event is broken.
+- Events live in `content/events.json` and are the single source of truth. Do not hardcode event bodies into engine code.
